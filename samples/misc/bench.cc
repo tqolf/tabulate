@@ -122,6 +122,21 @@ int gcm_decrypt(unsigned char *ciphertext, int ciphertext_len, unsigned char *aa
     }
 }
 
+static std::string ToHex(const void *addr, size_t size)
+{
+    std::string hex;
+    hex.resize(size * 2);
+
+    const char HEX_CHARS[] = "0123456789ABCDEF";
+    for (size_t i = 0; i < size; i++) {
+        unsigned char ch = ((const unsigned char *)addr)[i];
+        hex[i * 2 + 0] = HEX_CHARS[(ch >> 4) & 0x0F];
+        hex[i * 2 + 1] = HEX_CHARS[ch & 0x0F];
+    }
+
+    return hex;
+}
+
 int main(int argc, char **argv)
 {
     size_t repeat = 0;
@@ -542,6 +557,32 @@ int main(int argc, char **argv)
 
     {
         lockfree::atomic_bitset<1024> set;
+
+        // coverage
+        if (0) {
+            std::vector<std::thread> threads;
+            for (size_t i = 0; i < std::thread::hardware_concurrency(); i++) {
+                threads.emplace_back([&]() {
+                    set.test(100);
+                    set.test(111111111111);
+                    set.set(100);
+                    set.set(101);
+                    set.set(111111111111);
+                    for (size_t i = 0; i < 20; i++) {
+                        for (size_t j = i * 100000; j < i * 2000000; j++) {
+                            set.set(j);
+                        }
+                    }
+                    set.reset(100);
+                    set.reset(111111111111);
+                    set.reset();
+                });
+            }
+            for (auto &thr : threads) {
+                thr.join();
+            }
+        }
+
         if (!set_all([&](size_t i) {
                 set.set(i);
             })
@@ -621,15 +662,7 @@ int main(int argc, char **argv)
         unsigned char decrypted[sizeof(encrypted)];
         gcm_decrypt(encrypted, sizeof(encrypted), nullptr, 0, tag, sizeof(tag), key, iv, sizeof(iv), decrypted);
 
-        auto ToHex = [](const std::string &str) {
-            std::stringstream ss;
-            const char HEX_CHARS[] = "0123456789ABCDEF";
-            for (auto ch : str) {
-                ss << HEX_CHARS[(ch >> 4) & 0x0F] << HEX_CHARS[ch & 0x0F];
-            }
-            return ss.str();
-        };
-        std::cout << ToHex(std::string((const char *)decrypted, sizeof(decrypted))) << std::endl;
+        std::cout << ToHex(decrypted, sizeof(decrypted)) << std::endl;
     }
 
     return 0;

@@ -15,9 +15,15 @@ IF (JSONCPP_FOUND)
   LINK_LIBRARIES(${JSONCPP_LIBRARY})
 ENDIF ()
 
-LINK_DIRECTORIES(/usr/local/lib/ /usr/local/opt/openssl@3/lib/)
-INCLUDE_DIRECTORIES(/usr/local/include/ /usr/local/opt/openssl@3/include/)
-LINK_LIBRARIES(roaring crypto)
+INCLUDE(${CMAKE_ROOT}/Modules/FindOpenSSL.cmake)
+IF(OPENSSL_FOUND)
+  INCLUDE_DIRECTORIES(${OPENSSL_INCLUDE_DIR})
+  LINK_LIBRARIES(${OPENSSL_CRYPTO_LIBRARY})
+ENDIF()
+
+LINK_DIRECTORIES(/usr/local/lib/)
+INCLUDE_DIRECTORIES(/usr/local/include/)
+LINK_LIBRARIES(roaring)
 
 ENABLE_TESTING()
 FOREACH (category tabulate cxxopt progressbar threadpool misc)

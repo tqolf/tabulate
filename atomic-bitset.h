@@ -19,7 +19,7 @@ namespace lockfree
 
 enum class status { success, failed, not_found, yes, no };
 
-template <size_t Capacity, size_t BitsetWidth = 16, typename BitsetWord = uint32_t, size_t MaxTries = 32,
+template <size_t Capacity, size_t BucketWidth = 16, typename BucketWord = uint32_t, size_t MaxTries = 32,
           typename Index = size_t>
 class atomic_bitset {
   public:
@@ -36,14 +36,14 @@ class atomic_bitset {
         size_t cardinality, bucket, index, offset;
         cardinality = relocate(pos, bucket, index, offset);
 
-        BitSetElement *newelt = nullptr;
+        BitsetBucket *newelt = nullptr;
         while (tries < MaxTries) {
             TRACE("pos = %zu, bucket = %zu, index = %zu, offset = %zu", pos, bucket, index, offset);
 
             auto elt = elements[bucket].load(std::memory_order_relaxed);
             if (ATOMIC_BITSET_UNLIKELY(elt == nullptr)) {
                 if (newelt == nullptr) {
-                    newelt = new BitSetElement(cardinality, index, offset);
+                    newelt = new BitsetBucket(cardinality, index, offset);
                 } else {
                     newelt->set(index, offset);
                 }
@@ -52,13 +52,13 @@ class atomic_bitset {
                     return status::success;
                 } else {
                     if (elt->cardinality == cardinality) {
-                        elt->words[index].fetch_or(1 << offset);
+                        elt->reset(index, offset);
                         return status::success;
                     } else {
-                        newelt->reset(index, offset);
                         tries++;
-                        printf("tries = %zu\n", tries);
-                        relocate(bucket << BitsetWidth, bucket, index, offset);
+                        TRACE("tries = %zu", tries);
+                        newelt->reset(index, offset);
+                        relocate(bucket << BucketWidth, bucket, index, offset);
                     }
                 }
             } else if (ATOMIC_BITSET_LIKELY(elt->cardinality == cardinality)) {
@@ -66,8 +66,8 @@ class atomic_bitset {
                 return status::success;
             } else {
                 tries++;
-                printf("tries = %zu\n", tries);
-                relocate(bucket << BitsetWidth, bucket, index, offset);
+                TRACE("tries = %zu", tries);
+                relocate(bucket << BucketWidth, bucket, index, offset);
             }
         }
         if (newelt != nullptr) {
@@ -82,7 +82,7 @@ class atomic_bitset {
         for (size_t i = 0; i < Capacity; i++) {
             auto element = elements[i].load(std::memory_order_relaxed);
             if (element != nullptr) {
-                for (size_t i = 0; i < (1 << BitsetWidth) / (8 * sizeof(BitsetWord)); i++) {
+                for (size_t i = 0; i < (1 << BucketWidth) / (8 * sizeof(BucketWord)); i++) {
                     element->words[i].store(0, std::memory_order_relaxed);
                 }
             }
@@ -108,8 +108,8 @@ class atomic_bitset {
                 return status::success;
             } else {
                 tries++;
-                printf("tries = %zu\n", tries);
-                relocate(bucket << BitsetWidth, bucket, index, offset);
+                TRACE("tries = %zu", tries);
+                relocate(bucket << BucketWidth, bucket, index, offset);
             }
         }
 
@@ -132,52 +132,53 @@ class atomic_bitset {
                 return val->test(index, offset) ? status::yes : status::no;
             } else {
                 tries++;
-                printf("tries = %zu\n", tries);
-                relocate(bucket << BitsetWidth, bucket, index, offset);
+                TRACE("tries = %zu", tries);
+                relocate(bucket << BucketWidth, bucket, index, offset);
             }
         }
         return status::not_found;
     }
 
   private:
-    struct BitSetElement {
+    struct BitsetBucket {
         size_t cardinality;
-        std::atomic<BitsetWord> words[(1 << BitsetWidth) / (8 * sizeof(BitsetWord))];
-        BitSetElement(size_t cardinality = 0, size_t index = 0, size_t offset = ~0) : cardinality(cardinality)
+        std::atomic<BucketWord> words[(1 << BucketWidth) / (8 * sizeof(BucketWord))];
+        BitsetBucket(size_t cardinality = 0, size_t index = 0, size_t offset = ~0) : cardinality(cardinality)
         {
-            for (size_t i = 0; i < (1 << BitsetWidth) / (8 * sizeof(BitsetWord)); i++) {
+            for (size_t i = 0; i < (1 << BucketWidth) / (8 * sizeof(BucketWord)); i++) {
                 words[i].store(0, std::memory_order_relaxed);
             }
-            if (offset <= 8 * sizeof(BitsetWord) - 1) {
+            if (offset <= 8 * sizeof(BucketWord) - 1) {
                 words[index].fetch_or(1 << offset, std::memory_order_relaxed);
             }
         }
 
-        void set(size_t index, size_t offset)
+        inline void set(size_t index, size_t offset)
         {
             words[index].fetch_or(1 << offset, std::memory_order_relaxed);
         }
 
-        void reset(size_t index, size_t offset)
+        inline void reset(size_t index, size_t offset)
         {
             words[index].fetch_and(~(1 << offset), std::memory_order_relaxed);
         }
 
-        bool test(size_t index, size_t offset) const
+        inline bool test(size_t index, size_t offset) const
         {
             return words[index].load() & (1 << offset);
         }
     };
-    std::atomic<BitSetElement *> ATOMIC_BITSET_ALIGNED(64) elements[Capacity];
+    std::atomic<BitsetBucket *> ATOMIC_BITSET_ALIGNED(64) elements[Capacity];
 
     inline size_t relocate(Index pos, size_t &bucket, size_t &index, size_t &offset) const
     {
-        bucket = pos >> BitsetWidth;
-        size_t sub = pos & ((1 << BitsetWidth) - 1);
-        index = sub / (8 * sizeof(BitsetWord));
-        offset = sub & (8 * sizeof(BitsetWord) - 1);
+        size_t cardinality = pos >> BucketWidth;
+        size_t location = pos & ((1 << BucketWidth) - 1);
+        bucket = cardinality % Capacity;
+        index = location / (8 * sizeof(BucketWord));
+        offset = location & (8 * sizeof(BucketWord) - 1);
 
-        return bucket;
+        return cardinality;
     }
 };
 } // namespace lockfree
