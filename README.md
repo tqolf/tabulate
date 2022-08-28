@@ -1,3 +1,0 @@
-# devkit
-
-development kits collection
